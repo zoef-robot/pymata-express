@@ -46,6 +46,9 @@ class PrivateConstants:
     SONAR_DATA = 0x63  # distance data returned
     # end of FirmataExpress defined SYSEX commands
 
+    OPTENC_REQUEST = 0x66 # send Optical Encoder data request
+    OPTENC_DATA = 0x67 #  Optical Encoder data response
+
     SERVO_CONFIG = 0x70  # set servo pin and max and min angles
     STRING_DATA = 0x71  # a string message with 14-bits per char
     STEPPER_DATA = 0x72  # Stepper motor command
@@ -110,12 +113,19 @@ class PrivateConstants:
     TONE = 0x0d  # Any pin in tone mode
     PIXY = 0x0e  # reserved for pixy camera mode
     DHT = 0x0f  # DHT sensor
+    OPTENC = 0x17 # Optical Encoder sensor
 
     IGNORE = 0x7f
 
     # Tone commands
     TONE_TONE = 0  # play a tone
     TONE_NO_TONE = 1  # turn off tone
+
+    # Optical Encoder operation modes
+    OPTENC_CONFIGURE = 0
+    OPTENC_SET_MODE = 1
+    OPTENC_SET_DIR = 2
+    OPTENC_RESET = 3
 
     # DHT command
     DHT_CONFIG = 0x64  # dht config command

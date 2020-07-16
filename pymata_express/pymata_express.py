@@ -18,10 +18,11 @@
 import asyncio
 import sys
 import time
-# noinspection PyPackageRequirements
-from serial.tools import list_ports
+
 # noinspection PyPackageRequirementscd
 from serial.serialutil import SerialException
+# noinspection PyPackageRequirements
+from serial.tools import list_ports
 
 from pymata_express.pin_data import PinData
 from pymata_express.private_constants import PrivateConstants
@@ -144,6 +145,17 @@ class PymataExpress:
         #   pin: [callback, current_data_returned, time_stamp]
         self.active_sonar_map = {}
 
+        # The active_optenc map maps the optical encoders pin number (key) to the current data value
+        # If a callback is specified, it is stored in the map as well
+        # Map entry consists of:
+        #   pin: [callback, current_value, time_stamp]
+        self.active_optenc_map = {}
+
+        # The encoder_pin_to_ix_map maps the optical encoders pin number (key) to the order of initialization
+        # Map entry consists of:
+        # pin: order_of_init
+        self.encoder_pin_to_ix_map = {}
+
         # keep alive variables
         self.keep_alive_interval = []
         self.period = 0
@@ -195,6 +207,8 @@ class PymataExpress:
                                        self._sonar_data,
                                    PrivateConstants.DHT_DATA:
                                        self._dht_read_response,
+                                   PrivateConstants.OPTENC_DATA:
+                                       self._optenc_data,
                                    }
 
         # report query results are stored in this dictionary
@@ -686,6 +700,8 @@ class PymataExpress:
         SONAR   = 0x0c  # digital pin in SONAR mode
 
         TONE    = 0x0d  # digital pin in tone mode
+
+        OPTENC  = 0x17 # digital pin in OPTENC mode
 
         :param pin: Pin of interest
 
@@ -1269,6 +1285,111 @@ class PymataExpress:
                    PrivateConstants.TONE]
         await self._send_command(command)
 
+    async def set_pin_mode_optenc(self, pin_number, wheel_size=20, interrupt_mode=2, callback=None):
+        """
+        This is a custom FirmataExpress feature
+
+        Configure Optical Encoder prior to operation.
+
+        UP to a maximum of 4 Optical Encoders is supported
+
+        If the maximum is exceeded a message is sent to the console and the
+        request is ignored.
+
+        :param pin_number: The pin number to which the optical encoder is connected.
+
+        :param wheel_size: a tuning parameter. Specifies the number of gaps in the encoder wheel disk.
+
+        :param interrupt_mode: a tuning parameter. Specifies the interrupt mode (RISING,FALLING,CHANGE).
+
+        :param callback: optional callback function to report encoder data changes
+
+        callback returns a data list:
+
+        [pin_type, pin_number, encoder_value (in ticks), raw_time_stamp]
+
+        The pin_type for Optical Encoder pins = 23
+        """
+        data = [PrivateConstants.OPTENC_CONFIGURE, pin_number, interrupt_mode, wheel_size]
+
+        # if there is an entry for the trigger pin in existence,
+        # ignore the duplicate request.
+        if pin_number in self.active_optenc_map:
+            return
+
+        # await self._set_pin_mode(pin_number, PrivateConstants.OPTENC,
+        #                          PrivateConstants.INPUT)
+
+        # update the ping data map for this pin
+        if len(self.active_optenc_map) > 4:
+            print('optical_encoder_config: maximum number of devices assigned'
+                  ' - ignoring request')
+        else:
+            self.active_optenc_map[pin_number] = [callback, 0, 0]
+            self.encoder_pin_to_ix_map[pin_number] = len(self.encoder_pin_to_ix_map)
+
+        await self._send_sysex(PrivateConstants.OPTENC_REQUEST, data)
+
+    async def optical_encoder_set_mode(self, mode):
+        """
+        This is a custom FirmataExpress feature
+
+        Change Interrupt mode of optical encoder after configuration.
+
+        If no encoders are configured, a message is sent to console and the request is ignored
+
+        param: mode: The Interrupt mode to set the optical encoder to.
+            Mode 0: Trigger interrupt if encoder output is LOW
+            Mode 1: Trigger interrupt if encoder output CHANGES
+            Mode 2: Trigger interrupt if encoder output is FALLING
+            Mode 3: Trigger interrupt if encoder output is RISING
+        """
+        if not len(self.active_optenc_map) > 0:
+            print('optenc_set_mode: No encoders configured - ignoring request')
+            return
+        data = [PrivateConstants.OPTENC_SET_MODE, mode]
+        await self._send_sysex(PrivateConstants.OPTENC_REQUEST, data)
+
+    async def optical_encoder_set_dir(self, encoder_pin, direction):
+        """
+        This is a custom FirmataExpress feature
+
+        Change direction of optical encoder summation.
+
+        If encoder on pin encoder_pin is not configured, a message is sent to console and the request is ignored
+
+        param: encoder_pin: The pin number to which the optical encoder is connected
+
+        param: direction: The direction in which the motor is spinning.
+            direction True: Motor is going forwards
+            direction False: Motor is going backwards
+        """
+
+        if not encoder_pin in self.active_optenc_map:
+            print('optenc_set_dir: No encoder configured on pin %s - ignoring request' % str(encoder_pin))
+            return
+
+        data = [PrivateConstants.OPTENC_SET_DIR, self.encoder_pin_to_ix_map[encoder_pin], direction]
+        await self._send_sysex(PrivateConstants.OPTENC_REQUEST, data)
+
+    async def optical_encoder_reset(self, encoder_pin):
+        """
+        This is a custom FirmataExpress feature
+
+        Reset encoder return value on Arduino side.
+
+        If encoder on pin encoder_pin is not configured, a message is sent to the console and the request is ignored
+
+        param: encoder_pin: The pin number to which the optical encoder is connected
+
+        """
+        if not encoder_pin in self.active_optenc_map:
+            print('optenc_reset: No encoder configured on pin %s - ignoring request' % str(encoder_pin))
+            return
+
+        data = [PrivateConstants.OPTENC_RESET, self.encoder_pin_to_ix_map[encoder_pin]]
+        await self._send_sysex(PrivateConstants.OPTENC_REQUEST, data)
+
     async def _set_pin_mode(self, pin_number, pin_state, callback=None,
                             differential=1):
         """
@@ -1409,6 +1530,25 @@ class PymataExpress:
         return [sonar_pin_entry[1], sonar_pin_entry[2]]
         # value = sonar_pin_entry[1]
         # return value
+
+    async def optenc_read(self, pin_nr):
+        """
+        This is a custom FirmataExpress feature
+
+        Retrieve Optical Encoder data. The data is presented as a
+        dictionary.
+
+        The 'key' is the pin number specified in set_pin_mode_optenc()
+        and the 'data' is the current optical encoder value (in ticks / rpm)
+        for that pin. If there is no data, the value is set to None.
+
+        :param pin_nr: key into optical encoder data map
+
+        :returns: [last value, raw time stamp]
+        """
+
+        optenc_pin_entry = self.active_optenc_map.get(pin_nr)
+        return [optenc_pin_entry[1], optenc_pin_entry[2]]
 
     async def stepper_write(self, motor_speed, number_of_steps):
         """
@@ -1865,6 +2005,44 @@ class PymataExpress:
         else:
             sonar_pin_entry[1] = val
             self.active_sonar_map[pin_number] = sonar_pin_entry
+
+        await asyncio.sleep(self.sleep_tune)
+
+    async def _optenc_data(self, data):
+        """
+        This method handles the incoming optenc data message and stores the data in the response map.
+        If a callback was specified, the raw data is sent through the callback.
+
+        param data: Message data from Firmata
+        """
+
+        # strip off sysex start and end bytes
+        data = data[1:-1]
+        pin_nr = data[0]
+        val = data[1] + (data[2] << 8) + (data[3] << 16) + (data[4] << 24)
+        reply_data = [PrivateConstants.OPTENC]
+
+        optenc_pin_entry = self.active_optenc_map[pin_nr]
+
+        if optenc_pin_entry[0] is not None:
+            # check if value is updated
+            if optenc_pin_entry[1] != val:
+                optenc_pin_entry[1] = val
+                time_stamp = time.time()
+                optenc_pin_entry[2] = time_stamp
+                self.active_optenc_map[pin_nr] = optenc_pin_entry
+
+                if optenc_pin_entry[0]:
+                    reply_data.append(pin_nr)
+                    reply_data.append(val)
+                    reply_data.append(time_stamp)
+
+                    if optenc_pin_entry[1]:
+                        await optenc_pin_entry[0](reply_data)
+        else:
+            optenc_pin_entry[1] = val
+            optenc_pin_entry[2] = time.time()
+            self.active_optenc_map[pin_nr] = optenc_pin_entry
 
         await asyncio.sleep(self.sleep_tune)
 
