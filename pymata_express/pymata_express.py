@@ -2019,7 +2019,7 @@ class PymataExpress:
         # strip off sysex start and end bytes
         data = data[1:-1]
         pin_nr = data[0]
-        val = data[1] + (data[2] << 8) + (data[3] << 16) + (data[4] << 24)
+        val = data[1] + (data[2] << 7) + (data[3] << 14) + (data[4] << 21)
         reply_data = [PrivateConstants.OPTENC]
 
         optenc_pin_entry = self.active_optenc_map[pin_nr]
